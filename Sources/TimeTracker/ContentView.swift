@@ -5,10 +5,19 @@ struct ContentView: View {
     @State private var newTaskName: String = ""
     @State private var editingTaskId: UUID? = nil
     @State private var editingName: String = ""
+    @State private var userEditor: UserEditor? = nil
+    @State private var userEditorName: String = ""
+
+    private enum UserEditor: Equatable {
+        case add
+        case rename(UUID)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            userBar
+            if let editor = userEditor { userEditorRow(editor) }
             Divider()
             if store.state.tasks.isEmpty {
                 Text("No tasks yet. Add one below.")
@@ -45,6 +54,13 @@ struct ContentView: View {
                     .lineLimit(1)
             }
             Button {
+                store.openReport()
+            } label: {
+                Image(systemName: "doc.text.magnifyingglass")
+            }
+            .buttonStyle(.plain)
+            .help("Open HTML time report")
+            Button {
                 NSApp.terminate(nil)
             } label: {
                 Image(systemName: "power")
@@ -52,6 +68,75 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Quit Time Tracker")
         }
+    }
+
+    // MARK: - User bar
+
+    private var userBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: store.canTrack ? "person.crop.circle.fill" : "person.crop.circle.badge.questionmark")
+                .foregroundStyle(store.canTrack ? Color.accentColor : Color.orange)
+            Menu {
+                ForEach(store.state.activeUsers) { user in
+                    Button {
+                        store.setActiveUser(user.id)
+                    } label: {
+                        if user.id == store.activeUser?.id {
+                            Label(user.name, systemImage: "checkmark")
+                        } else {
+                            Text(user.name)
+                        }
+                    }
+                }
+                if !store.state.activeUsers.isEmpty { Divider() }
+                Button("Add User…") {
+                    userEditorName = ""
+                    userEditor = .add
+                }
+                if let active = store.activeUser {
+                    Button("Rename \(active.name)…") {
+                        userEditorName = active.name
+                        userEditor = .rename(active.id)
+                    }
+                    Button("Sign Out \(active.name)") { store.setActiveUser(nil) }
+                    Divider()
+                    Button("Remove \(active.name)", role: .destructive) { store.removeUser(userId: active.id) }
+                }
+            } label: {
+                Text(store.activeUser?.name ?? "Select user")
+                    .font(.subheadline)
+                    .foregroundStyle(store.canTrack ? Color.primary : Color.orange)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            Spacer()
+            if !store.canTrack {
+                Text("Select a user to track time")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func userEditorRow(_ editor: UserEditor) -> some View {
+        HStack {
+            TextField(editor == .add ? "New user name" : "User name", text: $userEditorName, onCommit: commitUserEditor)
+                .textFieldStyle(.roundedBorder)
+            Button(editor == .add ? "Add" : "Save", action: commitUserEditor)
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel") { userEditor = nil }
+        }
+    }
+
+    private func commitUserEditor() {
+        switch userEditor {
+        case .add: store.addUser(name: userEditorName)
+        case .rename(let id): store.renameUser(userId: id, to: userEditorName)
+        case nil: break
+        }
+        userEditor = nil
+        userEditorName = ""
     }
 
     // MARK: - Task row
@@ -83,6 +168,7 @@ struct ContentView: View {
                             editingTaskId = task.id
                         }
                         Button("New Turn") { store.startNewTurn(taskId: task.id) }
+                            .disabled(!store.canTrack)
                         Divider()
                         Button("Delete Task", role: .destructive) { store.deleteTask(taskId: task.id) }
                     } label: {
@@ -101,6 +187,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .disabled(!store.canTrack)
             } else {
                 ForEach(Array(task.turns.enumerated()), id: \.element.id) { idx, turn in
                     turnRow(task: task, turn: turn, index: idx + 1)
@@ -112,6 +199,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(!store.canTrack)
             }
         }
     }
@@ -126,6 +214,10 @@ struct ContentView: View {
                 .fill(running ? Color.green : (turn.isClosed ? Color.gray : Color.orange))
                 .frame(width: 8, height: 8)
             Text("Turn \(index)").font(.caption)
+            if running, let r = store.state.running {
+                Text(store.state.userName(id: r.userId))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Spacer()
             Text(TimeFormat.hms(store.liveElapsed(for: turn, in: task)))
                 .font(.caption).monospacedDigit()
@@ -137,19 +229,12 @@ struct ContentView: View {
                     store.pauseRunning()
                 } label: { Image(systemName: "pause.fill") }
                 .help("Pause")
-                Button {
-                    store.stopTurn(taskId: task.id, turnId: turn.id)
-                } label: { Image(systemName: "stop.fill") }
-                .help("Stop (close turn)")
             } else {
                 Button {
                     store.startOrResume(taskId: task.id, turnId: turn.id)
                 } label: { Image(systemName: "play.fill") }
-                .help("Resume")
-                Button {
-                    store.stopTurn(taskId: task.id, turnId: turn.id)
-                } label: { Image(systemName: "stop.fill") }
-                .help("Stop (close turn)")
+                .help(store.canTrack ? "Resume" : "Select a user first")
+                .disabled(!store.canTrack)
             }
         }
         .buttonStyle(.borderless)

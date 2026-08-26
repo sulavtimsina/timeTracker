@@ -15,11 +15,7 @@ final class TrackerStore: ObservableObject {
     private var terminateObserver: NSObjectProtocol?
 
     init() {
-        let fm = FileManager.default
-        let base = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = (base ?? URL(fileURLWithPath: NSTemporaryDirectory())).appendingPathComponent("TimeTracker", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        self.storageURL = dir.appendingPathComponent("state.json")
+        self.storageURL = TrackerPaths.stateURL
 
         load()
         // If a previous run left something running, auto-pause it (gap not counted) and mark for resume.
@@ -77,15 +73,17 @@ final class TrackerStore: ObservableObject {
         wakeObserver = ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.autoResumeAfterInterruption() }
         }
+        // Must run synchronously: the process exits as soon as this notification returns,
+        // so an async Task here would never get to save.
         terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.autoPauseForInterruption() }
+            MainActor.assumeIsolated { self?.autoPauseForInterruption() }
         }
     }
 
     private func autoPauseForInterruption() {
         guard let running = state.running else { return }
         commitElapsed(for: running)
-        state.pendingResume = RunningRef(taskId: running.taskId, turnId: running.turnId, startedAt: Date())
+        state.pendingResume = RunningRef(taskId: running.taskId, turnId: running.turnId, startedAt: Date(), userId: running.userId)
         state.running = nil
         save()
     }
@@ -101,7 +99,7 @@ final class TrackerStore: ObservableObject {
             save()
             return
         }
-        state.running = RunningRef(taskId: pending.taskId, turnId: pending.turnId, startedAt: Date())
+        state.running = RunningRef(taskId: pending.taskId, turnId: pending.turnId, startedAt: Date(), userId: pending.userId)
         state.pendingResume = nil
         save()
     }
@@ -137,6 +135,62 @@ final class TrackerStore: ObservableObject {
         return state.tasks.first { $0.id == r.taskId }
     }
 
+    var activeUser: User? {
+        state.user(id: state.activeUserId).flatMap { $0.isArchived ? nil : $0 }
+    }
+
+    /// Turns can only be started/resumed while a user is selected.
+    var canTrack: Bool { activeUser != nil }
+
+    // MARK: - Users
+
+    func addUser(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let user = User(name: trimmed)
+        state.users.append(user)
+        save()
+        if activeUser == nil { setActiveUser(user.id) }
+    }
+
+    func renameUser(userId: UUID, to newName: String) {
+        guard let i = state.users.firstIndex(where: { $0.id == userId }) else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        state.users[i].name = trimmed
+        save()
+    }
+
+    /// Archive (not delete) so past sessions keep their attribution in reports.
+    func removeUser(userId: UUID) {
+        guard let i = state.users.firstIndex(where: { $0.id == userId }) else { return }
+        if state.activeUserId == userId { setActiveUser(nil) }
+        state.users[i].isArchived = true
+        save()
+    }
+
+    /// Switch who is working. Any running turn is paused first so time is never
+    /// attributed to the wrong person; the new user must Start/Resume explicitly.
+    func setActiveUser(_ userId: UUID?) {
+        guard state.activeUserId != userId else { return }
+        if state.running != nil { pauseRunning() }
+        state.pendingResume = nil
+        state.activeUserId = userId
+        save()
+    }
+
+    // MARK: - Report
+
+    /// Write the HTML report next to the state file and open it in the default browser.
+    @discardableResult
+    func openReport() -> URL {
+        let url = TrackerPaths.reportURL
+        let html = ReportBuilder.html(state: state)
+        try? html.data(using: .utf8)?.write(to: url, options: .atomic)
+        NSWorkspace.shared.open(url)
+        return url
+    }
+
     // MARK: - Mutations
 
     func addTask(name: String) {
@@ -165,11 +219,12 @@ final class TrackerStore: ObservableObject {
     func startOrResume(taskId: UUID, turnId: UUID) {
         guard let (t, u) = locate(taskId: taskId, turnId: turnId) else { return }
         guard !state.tasks[t].turns[u].isClosed else { return }
+        guard let user = activeUser else { return }
         if let running = state.running {
             if running.taskId == taskId && running.turnId == turnId { return } // already running
             commitElapsed(for: running)
         }
-        state.running = RunningRef(taskId: taskId, turnId: turnId, startedAt: Date())
+        state.running = RunningRef(taskId: taskId, turnId: turnId, startedAt: Date(), userId: user.id)
         state.pendingResume = nil
         save()
     }
@@ -177,10 +232,11 @@ final class TrackerStore: ObservableObject {
     /// Create a fresh turn on this task and start it.
     func startNewTurn(taskId: UUID) {
         guard let t = state.tasks.firstIndex(where: { $0.id == taskId }) else { return }
+        guard let user = activeUser else { return }
         if let running = state.running { commitElapsed(for: running) }
         let turn = Turn()
         state.tasks[t].turns.append(turn)
-        state.running = RunningRef(taskId: taskId, turnId: turn.id, startedAt: Date())
+        state.running = RunningRef(taskId: taskId, turnId: turn.id, startedAt: Date(), userId: user.id)
         state.pendingResume = nil
         save()
     }
@@ -208,8 +264,11 @@ final class TrackerStore: ObservableObject {
 
     private func commitElapsed(for running: RunningRef) {
         guard let (t, u) = locate(taskId: running.taskId, turnId: running.turnId) else { return }
-        let delta = max(0, Date().timeIntervalSince(running.startedAt))
-        state.tasks[t].turns[u].accumulatedSeconds += delta
+        let now = Date()
+        guard now > running.startedAt else { return }
+        state.tasks[t].turns[u].sessions.append(
+            WorkSession(userId: running.userId, start: running.startedAt, end: now)
+        )
     }
 
     private func locate(taskId: UUID, turnId: UUID) -> (Int, Int)? {
