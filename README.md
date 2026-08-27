@@ -28,6 +28,31 @@ swift build -c release
 
 Or simply `swift run -c release`, which builds and runs in one step (Ctrl-C quits).
 
+### Install as an app in /Applications
+
+```sh
+scripts/build-app.sh            # builds dist/TimeTracker.app
+scripts/build-app.sh --install  # also installs to /Applications and launches it
+```
+
+This wraps the release binary in a proper `.app` bundle with an icon
+(`packaging/AppIcon.icns`) and `packaging/Info.plist`, ad-hoc code-signs it, and — with
+`--install` — replaces `/Applications/TimeTracker.app` so you can launch it from Launchpad
+or Spotlight. The bundle sets `LSUIElement`, so there is no Dock icon; look for the clock
+in the menu bar.
+
+To regenerate the icon from its source drawing:
+
+```sh
+swift packaging/makeicon.swift icon1024.png
+mkdir -p AppIcon.iconset
+for s in 16 32 128 256 512; do
+  sips -z $s $s icon1024.png --out AppIcon.iconset/icon_${s}x${s}.png
+  sips -z $((s*2)) $((s*2)) icon1024.png --out AppIcon.iconset/icon_${s}x${s}@2x.png
+done
+iconutil -c icns AppIcon.iconset -o packaging/AppIcon.icns
+```
+
 The app appears as a **clock icon** in the menu bar. While a turn is running it becomes a
 **record icon** followed by the task name and elapsed time, e.g. `⏺ Task 1 12:34`.
 
