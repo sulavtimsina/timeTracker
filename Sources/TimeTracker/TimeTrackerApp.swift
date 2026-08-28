@@ -54,10 +54,8 @@ private struct MenuBarLabel: View {
         let _ = store.tick
         HStack(spacing: 4) {
             Image(systemName: store.state.running == nil ? "clock" : "record.circle")
-            if let task = store.runningTask,
-               let r = store.state.running,
-               let turn = task.turns.first(where: { $0.id == r.turnId }) {
-                Text("\(shortName(task.name)) \(TimeFormat.hms(store.liveElapsed(for: turn, in: task)))")
+            if let info = store.runningInfo {
+                Text("\(shortName(info.task.name)) · Turn \(info.index) \(TimeFormat.hms(store.liveElapsed(for: info.turn, in: info.task)))")
                     .monospacedDigit()
             }
         }

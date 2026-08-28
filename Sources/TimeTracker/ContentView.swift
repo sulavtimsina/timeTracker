@@ -45,10 +45,8 @@ struct ContentView: View {
             Image(systemName: "clock.fill")
             Text("Time Tracker").font(.headline)
             Spacer()
-            if let running = store.runningTask,
-               let r = store.state.running,
-               let turn = running.turns.first(where: { $0.id == r.turnId }) {
-                Text("\(running.name) • \(TimeFormat.hms(store.liveElapsed(for: turn, in: running)))")
+            if let info = store.runningInfo {
+                Text("\(info.task.name) • Turn \(info.index) • \(TimeFormat.hms(store.liveElapsed(for: info.turn, in: info.task)))")
                     .font(.caption)
                     .foregroundStyle(.green)
                     .lineLimit(1)

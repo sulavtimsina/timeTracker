@@ -135,6 +135,14 @@ final class TrackerStore: ObservableObject {
         return state.tasks.first { $0.id == r.taskId }
     }
 
+    /// The running task, its turn, and the 1-based turn number — for labels.
+    var runningInfo: (task: TrackedTask, turn: Turn, index: Int)? {
+        guard let r = state.running,
+              let task = state.tasks.first(where: { $0.id == r.taskId }),
+              let i = task.turns.firstIndex(where: { $0.id == r.turnId }) else { return nil }
+        return (task, task.turns[i], i + 1)
+    }
+
     var activeUser: User? {
         state.user(id: state.activeUserId).flatMap { $0.isArchived ? nil : $0 }
     }
