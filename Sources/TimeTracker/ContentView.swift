@@ -19,13 +19,13 @@ struct ContentView: View {
             userBar
             if let editor = userEditor { userEditorRow(editor) }
             Divider()
-            if store.state.tasks.isEmpty {
+            if store.state.activeTasks.isEmpty {
                 Text("No tasks yet. Add one below.")
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(store.state.tasks) { task in
+                    ForEach(store.state.activeTasks) { task in
                         taskRow(task)
                         Divider()
                     }
@@ -155,7 +155,25 @@ struct ContentView: View {
                     }
                     Button("Cancel") { editingTaskId = nil }
                 } else {
-                    Text(task.name).font(.subheadline).bold()
+                    let collapsed = store.isCollapsed(taskId: task.id)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { store.toggleCollapsed(taskId: task.id) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                                .frame(width: 12)
+                            Text(task.name).font(.subheadline).bold()
+                            if collapsed, !task.turns.isEmpty {
+                                Text("\(task.turns.count) turn\(task.turns.count == 1 ? "" : "s")")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(collapsed ? "Expand turns" : "Collapse turns")
                     Spacer()
                     Text(TimeFormat.hms(store.liveTotal(for: task)))
                         .font(.caption).monospacedDigit()
@@ -168,7 +186,7 @@ struct ContentView: View {
                         Button("New Turn") { store.startNewTurn(taskId: task.id) }
                             .disabled(!store.canTrack)
                         Divider()
-                        Button("Delete Task", role: .destructive) { store.deleteTask(taskId: task.id) }
+                        Button("Delete Task…", role: .destructive) { confirmDelete(task) }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -177,7 +195,9 @@ struct ContentView: View {
                 }
             }
 
-            if task.turns.isEmpty {
+            if store.isCollapsed(taskId: task.id) {
+                EmptyView()
+            } else if task.turns.isEmpty {
                 Button {
                     store.startNewTurn(taskId: task.id)
                 } label: {
@@ -282,6 +302,19 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
             Button("Add", action: submitNew)
                 .keyboardShortcut(.defaultAction)
+        }
+    }
+
+    private func confirmDelete(_ task: TrackedTask) {
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(task.name)”?"
+        alert.informativeText = "The task will disappear from this list. Its recorded time (\(TimeFormat.hms(store.liveTotal(for: task)))) is kept and still appears in the report."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            store.deleteTask(taskId: task.id)
         }
     }
 

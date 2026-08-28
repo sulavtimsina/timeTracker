@@ -7,6 +7,11 @@ final class TrackerStore: ObservableObject {
     @Published private(set) var state: AppState = .empty
     /// Ticks every second while a turn is running, to drive live UI updates.
     @Published private(set) var tick: Date = Date()
+    /// Tasks whose turn list is folded away in the popover (UI preference, kept in UserDefaults).
+    @Published private(set) var collapsedTaskIds: Set<UUID> = {
+        let raw = UserDefaults.standard.stringArray(forKey: "collapsedTaskIds") ?? []
+        return Set(raw.compactMap(UUID.init(uuidString:)))
+    }()
 
     private let storageURL: URL
     private var timerCancellable: AnyCancellable?
@@ -18,6 +23,7 @@ final class TrackerStore: ObservableObject {
         self.storageURL = TrackerPaths.stateURL
 
         load()
+        backupDaily()
         // If a previous run left something running, auto-pause it (gap not counted) and mark for resume.
         if let running = state.running {
             var updated = running
@@ -45,22 +51,56 @@ final class TrackerStore: ObservableObject {
 
     // MARK: - Persistence
 
+    /// True once the on-disk file has been read (or confirmed absent). Saving before that
+    /// could overwrite real data with the empty default state, so `save()` refuses.
+    private var loaded = false
+
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL) else { return }
+        defer { loaded = true }
+        guard let data = try? Data(contentsOf: storageURL) else { return } // first run
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        if let decoded = try? decoder.decode(AppState.self, from: data) {
-            self.state = decoded
+        do {
+            self.state = try decoder.decode(AppState.self, from: data)
+        } catch {
+            // Never overwrite a file we couldn't read. Set it aside so it can be recovered.
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            let aside = TrackerPaths.directory.appendingPathComponent("state.unreadable-\(stamp).json")
+            try? FileManager.default.moveItem(at: storageURL, to: aside)
+            NSLog("TimeTracker: could not decode state.json (\(error)); moved it to \(aside.path)")
         }
     }
 
     private func save() {
+        guard loaded else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(state) {
-            try? data.write(to: storageURL, options: .atomic)
+        guard let data = try? encoder.encode(state) else { return }
+        do {
+            try data.write(to: storageURL, options: .atomic)
+        } catch {
+            NSLog("TimeTracker: failed to save state.json: \(error)")
         }
+    }
+
+    /// Copy state.json to backups/state-YYYY-MM-DD.json once per day; keep the newest 30.
+    private func backupDaily() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: storageURL.path) else { return }
+        let dir = TrackerPaths.backupsDirectory
+        let day: String = {
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date())
+        }()
+        let target = dir.appendingPathComponent("state-\(day).json")
+        if !fm.fileExists(atPath: target.path) {
+            try? fm.copyItem(at: storageURL, to: target)
+        }
+        let old = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasPrefix("state-") && $0.hasSuffix(".json") }
+            .sorted(by: >)
+            .dropFirst(30)
+        for name in old { try? fm.removeItem(at: dir.appendingPathComponent(name)) }
     }
 
     // MARK: - Lifecycle observers
@@ -150,6 +190,15 @@ final class TrackerStore: ObservableObject {
     /// Turns can only be started/resumed while a user is selected.
     var canTrack: Bool { activeUser != nil }
 
+    // MARK: - Collapse
+
+    func isCollapsed(taskId: UUID) -> Bool { collapsedTaskIds.contains(taskId) }
+
+    func toggleCollapsed(taskId: UUID) {
+        if collapsedTaskIds.contains(taskId) { collapsedTaskIds.remove(taskId) } else { collapsedTaskIds.insert(taskId) }
+        UserDefaults.standard.set(collapsedTaskIds.map { $0.uuidString }, forKey: "collapsedTaskIds")
+    }
+
     // MARK: - Users
 
     func addUser(name: String) {
@@ -216,10 +265,13 @@ final class TrackerStore: ObservableObject {
         save()
     }
 
+    /// "Delete" = archive. The task disappears from the popover but every recorded session
+    /// stays on disk and in the report. Nothing in the app ever removes recorded time.
     func deleteTask(taskId: UUID) {
+        guard let i = state.tasks.firstIndex(where: { $0.id == taskId }) else { return }
         if state.running?.taskId == taskId { pauseRunning() }
-        state.tasks.removeAll { $0.id == taskId }
         if state.pendingResume?.taskId == taskId { state.pendingResume = nil }
+        state.tasks[i].isArchived = true
         save()
     }
 

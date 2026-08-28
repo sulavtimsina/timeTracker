@@ -91,13 +91,27 @@ struct TrackedTask: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     var turns: [Turn]
+    /// "Deleted" in the UI. Kept on disk so recorded time is never lost.
+    var isArchived: Bool
     let createdAt: Date
 
-    init(id: UUID = UUID(), name: String, turns: [Turn] = [], createdAt: Date = Date()) {
+    init(id: UUID = UUID(), name: String, turns: [Turn] = [], isArchived: Bool = false, createdAt: Date = Date()) {
         self.id = id
         self.name = name
         self.turns = turns
+        self.isArchived = isArchived
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, turns, isArchived, createdAt }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        turns = try c.decodeIfPresent([Turn].self, forKey: .turns) ?? []
+        isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 
     var totalSeconds: TimeInterval {
@@ -155,4 +169,5 @@ struct AppState: Codable, Equatable {
     }
 
     var activeUsers: [User] { users.filter { !$0.isArchived } }
+    var activeTasks: [TrackedTask] { tasks.filter { !$0.isArchived } }
 }

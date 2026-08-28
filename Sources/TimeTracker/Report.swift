@@ -52,15 +52,16 @@ enum ReportBuilder {
         var byTask = ""
         var matrixHead = userOrder.map { "<th class=\"num\">\(esc(state.userName(id: $0)))</th>" }.joined()
         if matrixHead.isEmpty { matrixHead = "<th class=\"num\">—</th>" }
-        for task in state.tasks {
-            let secs = total { $0.taskName == task.name }
+        for task in state.tasks where !task.isArchived || task.totalSeconds > 0 {
+            let name = label(task)
+            let secs = total { $0.taskName == name }
             let cells = userOrder.map { uid -> String in
-                let s = total { $0.taskName == task.name && $0.userId == uid }
+                let s = total { $0.taskName == name && $0.userId == uid }
                 return "<td class=\"num\(s == 0 ? " dim" : "")\">\(s == 0 ? "—" : hm(s))</td>"
             }.joined()
             byTask += """
             <tr>
-              <td class="name">\(esc(task.name))</td>
+              <td class="name">\(esc(name))</td>
               <td class="num">\(hm(secs))</td>
               <td class="bar"><div class="fill task" style="width:\(pct(secs, grand))%"></div></td>
               <td class="num">\(task.turns.count)</td>
@@ -192,18 +193,22 @@ enum ReportBuilder {
 
     // MARK: - Flatten
 
+    private static func label(_ task: TrackedTask) -> String {
+        task.isArchived ? "\(task.name) (deleted)" : task.name
+    }
+
     private static func flatten(_ state: AppState, now: Date) -> [Row] {
         var rows: [Row] = []
         for task in state.tasks {
             for (i, turn) in task.turns.enumerated() {
                 for s in turn.sessions {
                     rows.append(Row(userId: s.userId, userName: state.userName(id: s.userId),
-                                    taskName: task.name, turnIndex: i + 1,
+                                    taskName: label(task), turnIndex: i + 1,
                                     start: s.start, end: s.end, isLive: false))
                 }
                 if let r = state.running, r.taskId == task.id, r.turnId == turn.id {
                     rows.append(Row(userId: r.userId, userName: state.userName(id: r.userId),
-                                    taskName: task.name, turnIndex: i + 1,
+                                    taskName: label(task), turnIndex: i + 1,
                                     start: r.startedAt, end: max(now, r.startedAt), isLive: true))
                 }
             }
@@ -288,4 +293,9 @@ enum TrackerPaths {
     }
     static var stateURL: URL { directory.appendingPathComponent("state.json") }
     static var reportURL: URL { directory.appendingPathComponent("report.html") }
+    static var backupsDirectory: URL {
+        let dir = directory.appendingPathComponent("backups", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 }

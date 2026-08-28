@@ -96,8 +96,10 @@ buttons are disabled and the row shows *Select a user to track time*.
 
 ### Tasks and turns
 
-Each task shows its name, total time, and a `…` menu (Rename, New Turn, Delete Task).
-Under it, one row per turn:
+Each task shows a **chevron** (click the name to collapse or expand its turns — remembered
+across relaunches), its total time, and a `…` menu (Rename, New Turn, Delete Task — which
+asks for confirmation and keeps the recorded time). Under it, one row per turn; if a task
+has more than 10 turns the list scrolls and opens on the running or newest turn.
 
 | Turn state | Dot | Buttons |
 |---|---|---|
@@ -168,16 +170,38 @@ Time recorded before users existed appears as **Unassigned**.
 |---|---|
 | `~/Library/Application Support/TimeTracker/state.json` | All tasks, turns, sessions, users — the single source of truth. Written on every change. |
 | `~/Library/Application Support/TimeTracker/report.html` | The most recently generated report. |
+| `~/Library/Application Support/TimeTracker/backups/state-YYYY-MM-DD.json` | Automatic daily backup, taken on the first launch of each day. The newest 30 are kept. |
 
-`state.json` is human-readable JSON; back it up by copying the file. Set the environment
-variable `TIMETRACKER_DIR=/some/folder` to make the app and the CLI use a different folder
-(handy for testing or keeping separate books).
+`state.json` is human-readable JSON. Set the environment variable
+`TIMETRACKER_DIR=/some/folder` to make the app and the CLI use a different folder (handy for
+testing or keeping separate books).
+
+### Data safety
+
+Recorded time is treated as irreplaceable. Rules the app follows:
+
+- **Nothing in the app removes recorded time.** *Delete Task* and *Remove User* only
+  archive: the item disappears from the popover, but every session stays in `state.json`
+  and in the report (tasks show as `Name (deleted)`). Deleting a task asks for
+  confirmation first.
+- **Every change is saved immediately** with an atomic write, so a crash mid-write can't
+  leave a half-written file.
+- **Quitting saves the live turn** — the ⏻ button, `kill`, `pkill`, and Ctrl-C all pause
+  the running turn and write it out before exiting. Sleep does the same. On relaunch / wake
+  the turn resumes; the time away is not counted.
+- **An unreadable `state.json` is never overwritten.** If the file can't be parsed, it is
+  moved to `state.unreadable-<timestamp>.json` and the app starts empty; the original is
+  there to recover from.
+- **Daily backups** are taken automatically into `backups/`.
+
+To restore from a backup: quit the app, copy the chosen `backups/state-….json` over
+`state.json`, and relaunch.
 
 ### Data model
 
 - **User**: `{ id, name, isArchived, createdAt }` — *Remove* archives rather than deletes so
   old sessions keep their name.
-- **Task**: `{ id, name, turns[], createdAt }`
+- **Task**: `{ id, name, turns[], isArchived, createdAt }` — *Delete Task* archives.
 - **Turn**: `{ id, sessions[], isClosed, createdAt }`; `accumulatedSeconds` is derived (sum of
   sessions) and written only for readability.
 - **Session**: `{ id, userId, start, end }` — one uninterrupted stretch of work by one user.
