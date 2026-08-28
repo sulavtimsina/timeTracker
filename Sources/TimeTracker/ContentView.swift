@@ -187,9 +187,7 @@ struct ContentView: View {
                 .controlSize(.small)
                 .disabled(!store.canTrack)
             } else {
-                ForEach(Array(task.turns.enumerated()), id: \.element.id) { idx, turn in
-                    turnRow(task: task, turn: turn, index: idx + 1)
-                }
+                turnList(task)
                 Button {
                     store.startNewTurn(taskId: task.id)
                 } label: {
@@ -199,6 +197,44 @@ struct ContentView: View {
                 .controlSize(.small)
                 .disabled(!store.canTrack)
             }
+        }
+    }
+
+    // MARK: - Turn list (max 10 visible, then scrolls)
+
+    private static let maxVisibleTurns = 10
+    private static let turnRowHeight: CGFloat = 22
+    private static let turnRowSpacing: CGFloat = 4
+
+    @ViewBuilder
+    private func turnList(_ task: TrackedTask) -> some View {
+        let rows = VStack(alignment: .leading, spacing: Self.turnRowSpacing) {
+            ForEach(Array(task.turns.enumerated()), id: \.element.id) { idx, turn in
+                turnRow(task: task, turn: turn, index: idx + 1)
+                    .frame(height: Self.turnRowHeight)
+                    .id(turn.id)
+            }
+        }
+        if task.turns.count <= Self.maxVisibleTurns {
+            rows
+        } else {
+            let visible = CGFloat(Self.maxVisibleTurns)
+            let height = visible * Self.turnRowHeight + (visible - 1) * Self.turnRowSpacing
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    rows.padding(.trailing, 4)
+                }
+                .frame(height: height)
+                .onAppear {
+                    // Land on the running turn if this task owns it, else the newest turn.
+                    let target = store.state.running.flatMap { $0.taskId == task.id ? $0.turnId : nil }
+                        ?? task.turns.last?.id
+                    if let target { proxy.scrollTo(target, anchor: .center) }
+                }
+            }
+            Text("\(task.turns.count) turns · scroll for more")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
