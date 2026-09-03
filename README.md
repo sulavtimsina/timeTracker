@@ -99,7 +99,7 @@ buttons are disabled and the row shows *Select a user to track time*.
 Each task shows a **chevron** (click the name to collapse or expand its turns — remembered
 across relaunches), its total time, and a `…` menu (Rename, New Turn, Delete Task — which
 asks for confirmation and keeps the recorded time). Under it, one row per turn; if a task
-has more than 10 turns the list scrolls and opens on the running or newest turn.
+has more than 5 turns the list scrolls and opens on the running or newest turn.
 
 | Turn state | Dot | Buttons |
 |---|---|---|

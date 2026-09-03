@@ -220,9 +220,9 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Turn list (max 10 visible, then scrolls)
+    // MARK: - Turn list (max 5 visible, then scrolls)
 
-    private static let maxVisibleTurns = 10
+    private static let maxVisibleTurns = 5
     private static let turnRowHeight: CGFloat = 22
     private static let turnRowSpacing: CGFloat = 4
 
